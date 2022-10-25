@@ -43,27 +43,28 @@ public:
     {
         erase();
         move(1, 1);
-        printw("Gene total count: %d", my_head->gene_count_total);
+        
+        printw("Gene total count: %ld", std::atomic_load(&my_head->gene_count_total));
         move(2, 1);
-        printw("Gene fails count: %d", get_failed_count());
+        printw("Gene fails count: %ld", get_failed_count());
         move(3, 1);
-        printw("Fork fails: \t%d", my_head->fork_fail_count);
+        printw("Fork fails: \t%ld", std::atomic_load(&my_head->fork_fail_count));
         move(4, 1);
-        printw("Beaten: \t%d", my_head->sfree_fail_count);
+        printw("Beaten: \t%ld", std::atomic_load(&my_head->sfree_fail_count));
         move(5, 1);
-        printw("Mutate dead: \t%d", my_head->func_fail_count);
+        printw("Mutate dead: \t%ld", std::atomic_load(&my_head->func_fail_count));
         move(6, 1);
-        printw("Filled mem: \t%d", my_head->smalc_fail_count);
+        printw("Filled mem: \t%ld", std::atomic_load(&my_head->smalc_fail_count));
         move(7, 1);
-        printw("End of life: \t%d", my_head->life_end_count);
+        printw("End of life: \t%ld", std::atomic_load(&my_head->life_end_count));
         move(9, 1);
-        printw("Active: \t%d", my_head->gene_count_total - get_failed_count());
+        printw("Active: \t%ld", std::atomic_load(&my_head->gene_count_total) - get_failed_count());
         move(10, 1);
-        for(size_t i = 0; i < 32; i++)
+        for(size_t i = 0; i < MAX_SIZE / 32; i++)
         {
-            for(size_t j = 0; j < 128; j++)
+            for(size_t j = 0; j < 32; j++)
             {
-                GeneLibrary::pid_mem *a_pidm = (GeneLibrary::pid_mem *)(my_fitness + i * 128 + j);
+                GeneLibrary::pid_mem *a_pidm = (GeneLibrary::pid_mem *)(my_fitness + i * 32 + j);
                 if(a_pidm->ffitness >= 0.99999f)
                 {
                     addch('#');

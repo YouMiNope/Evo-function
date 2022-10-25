@@ -3,6 +3,10 @@
 
 #include <unistd.h>
 #include <inttypes.h>
+#include <pthread.h>
+#include <atomic>
+
+#define MAX_SIZE 512
 
 namespace GeneLibrary
 {
@@ -11,13 +15,15 @@ namespace GeneLibrary
         size_t max_size;
         size_t p_data;
         size_t p_fitness;
-        size_t gene_count_total;
-        size_t sfree_fail_count;
-        size_t smalc_fail_count;
-        size_t life_end_count;
-        size_t func_fail_count;
-        size_t fork_fail_count;
-        bool is_terminate;
+        std::atomic_uint64_t gene_count_total;
+        std::atomic_uint64_t sfree_fail_count;
+        std::atomic_uint64_t smalc_fail_count;
+        std::atomic_uint64_t life_end_count;
+        std::atomic_uint64_t func_fail_count;
+        std::atomic_uint64_t fork_fail_count;
+        
+        pthread_mutex_t mem_lock;
+        std::atomic_bool is_terminate;
     };
     size_t page_size;
     size_t code_size;

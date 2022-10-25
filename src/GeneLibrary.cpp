@@ -9,8 +9,6 @@
 #include <memory.h>
 #include <random>
 
-#define MAX_SIZE 256
-
 const size_t INIT_FACTOR_LEN = 4;
 const uint8_t init_factor[] = {
     0x55,               // push rbp
@@ -107,6 +105,10 @@ namespace GeneLibrary
         shm_head->fork_fail_count   = 0;
         shm_head->func_fail_count   = 0;
         shm_head->life_end_count    = 0;
+        pthread_mutexattr_t _attr;
+        pthread_mutexattr_init(&_attr);
+        pthread_mutexattr_setpshared(&_attr, PTHREAD_PROCESS_SHARED);
+        pthread_mutex_init(&shm_head->mem_lock, &_attr);
     }
 
     size_t load_seed_code(const char *path)
@@ -140,7 +142,10 @@ namespace GeneLibrary
             return -1;
         }
         memcpy(shm_data, file_code + _begin, _end - _begin);
-        memset((void *)shm_fitness, 0, code_size * sizeof(double));
+        for(size_t i = 0; i < code_size; i++)
+        {
+            shm_fitness[i] = 0;
+        }
 
         munmap(file_code, 1 * page_size);
         return _end - _begin;
@@ -206,8 +211,10 @@ namespace GeneLibrary
             pid_mem *a_pid = (pid_mem *)(shm_fitness + i);
             if(a_pid->ffitness + 0.00001f < ffitness)
             {
+                pthread_mutex_lock(&shm_head->mem_lock);
                 a_pid->pid = pid;
                 a_pid->ffitness = ffitness;
+                pthread_mutex_unlock(&shm_head->mem_lock);
                 return i;
             }
         }

@@ -3,11 +3,20 @@
 #include <sys/shm.h>
 #include <sys/ipc.h>
 #include <sys/mman.h>
+#include <sys/signal.h>
+#include <string.h>
+#include <sys/wait.h>
 #include <fcntl.h>
 #include <math.h>
-#include <sys/proc.h>
 
 #include "GeneLibrary.hpp"
+
+// Exit codes:
+#define EXIT_FORK_ERROR -1
+#define EXIT_FREE_BEATEN -2
+#define EXIT_MEM_FULL -3
+
+#define LIFE 5
 
 const size_t CODE_SIZE = 4096UL;
 
@@ -20,6 +29,15 @@ double m_func_cost(double *real, double *test);
 // SIGCHLD handle
 void handle_child(int);
 void handle_sig(int);
+
+//  On exit
+void handle_exit(int, void *);
+
+typedef struct
+{
+    uint8_t *p_code;
+    GeneLibrary::shm_head_data *p_shm_head;
+}share_args;
 
 struct gene
 {
@@ -34,9 +52,14 @@ int main(int args_count, const char *args[])
     GeneLibrary::init();
     
     gene my_gene;
-    uint8_t *code = (uint8_t *)mmap(NULL, CODE_SIZE, PROT_EXEC | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
     int shm_id = shmget(ftok("./", 0), GeneLibrary::max_size, 0666);
+    share_args my_args;
+
+    uint8_t *code = (uint8_t *)mmap(NULL, CODE_SIZE, PROT_EXEC | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
     GeneLibrary::shm_head_data *shm_head = (GeneLibrary::shm_head_data *)shmat(shm_id, (void *)0, 0);
+
+    my_args.p_code = code;
+    my_args.p_shm_head = shm_head;
 
     signal(SIGCHLD, handle_child);
     signal(SIGSEGV, handle_sig);
@@ -45,59 +68,47 @@ int main(int args_count, const char *args[])
     signal(SIGILL, handle_sig);
     signal(SIGABRT, handle_sig);
 
-    
+    on_exit(handle_exit, &my_args);
 
     my_gene.len = GeneLibrary::load_seed_code(args[1]);
     my_gene.fitness = 1.;
     my_gene.pos = GeneLibrary::smalloc(getpid(), (float)my_gene.fitness);
-    memcpy(code, (uint8_t *)(shm_head + 1), my_gene.len);
+    if(my_gene.pos == -1)   exit(EXIT_MEM_FULL);
+    memcpy(my_args.p_code, (uint8_t *)(my_args.p_shm_head + 1), my_gene.len);
     size_t life = 0;
 
 Load:
-    usleep(200000);
+    // usleep(50000);
     // Load the function code
     //      copy code from sharemem to mmap
-    //      set fitness of code in sharemem to 0
-    // memcpy(code, shm_codes + my_gene.pos, my_gene.len);
-    int ret = GeneLibrary::sfree(my_gene.pos, getpid(), (float)my_gene.fitness);
-    if(ret != 0)
-    {
-        shm_head->sfree_fail_count++;
-        shmdt(shm_head);
-        munmap(code, CODE_SIZE);
-        exit(-2);
-    }
+    //      set fitness of code in sharemem to 0    (give up)
 
 Fork:
     // Fork
     //      Self: do nothing
     //      Chld: mutate code
     int fork_id = fork();
-    if(fork_id < 0)
-    {
-        // sleep(10);
-        // goto Fork;
-        shm_head->fork_fail_count++;
-        // printf("fork error: %d", errno);
-        shmdt(shm_head);
-        munmap(code, CODE_SIZE);
-        exit(-1);
-    }
+    if(fork_id < 0)         exit(EXIT_FORK_ERROR);
     if(fork_id > 0)
     {
-        // nothing
         life++;
     }
     else if(fork_id == 0)
     {
+        my_args.p_shm_head->gene_count_total++;
+        my_gene.pos = GeneLibrary::smalloc(getpid(), (float)my_gene.fitness);
+        if(my_gene.pos == -1)   exit(EXIT_MEM_FULL);
         // mutate
         life = 0;
-        shm_head->gene_count_total++;
         GeneLibrary::mutate_prob a_prob;
-        a_prob.flip = 13;
-        a_prob.add  = 12;
-        a_prob.del  = 12;
-        my_gene.len = GeneLibrary::mutate(code, my_gene.len, a_prob);
+        a_prob.flip = 14;
+        a_prob.add  = 14;
+        a_prob.del  = 14;
+
+        // a_prob.flip = 32;
+        // a_prob.add  = 32;
+        // a_prob.del  = 32;
+        my_gene.len = GeneLibrary::mutate(my_args.p_code, my_gene.len, a_prob);
     }
 
 Exec:
@@ -107,43 +118,40 @@ Exec:
     double test_data[16 * 3];
     double real_data[16 * 3];
     GeneLibrary::gen_test_data(test_data, 16 * 2);
-    memcpy(real_data, test_data, 16 * 2);
+    memcpy(real_data, test_data, 16 * 2 * sizeof(double));
 
-    shm_head->func_fail_count++;
-    shmdt(shm_head);
+    int ret = GeneLibrary::sfree(my_gene.pos, getpid(), (float)my_gene.fitness);
+    if(ret == -1)           exit(EXIT_FREE_BEATEN);
+    my_args.p_shm_head->func_fail_count++;
     alarm(1);
-    ((void (*)(void *))code)(test_data);
+    ((void (*)(void *))my_args.p_code)(test_data);
     alarm(0);
-    shm_head = (GeneLibrary::shm_head_data *)shmat(shm_id, (void *)0, 0);
-    shm_head->func_fail_count--;
+    my_args.p_shm_head->func_fail_count--;
+    my_gene.pos = GeneLibrary::smalloc(getpid(), (float)my_gene.fitness);
+    if(my_gene.pos == -1)   exit(EXIT_MEM_FULL);
+
     m_func(real_data);
 
     // Collect data
     //      fitness.
     double cost = m_func_cost(real_data, test_data);
-    my_gene.fitness = 1. / cost + 1.;
+    my_gene.fitness = 1. / (cost + 1.);
+    // printf("%lf\t%lf\n", my_gene.fitness, cost);
 
-Upload:
-    // Update code to sharemem
-    //      Can return: update gene posit.
-    //      bad return: exit.
-    my_gene.pos = GeneLibrary::smalloc(getpid(), (float)my_gene.fitness);
-    if(my_gene.pos == -1)
-    {
-        shm_head->smalc_fail_count++;
-        shmdt(shm_head);
-        munmap(code, CODE_SIZE);
-        exit(-3);
-    }
-    // memcpy(shm_codes+ my_gene.pos, code, my_gene.len);
-
-    if(!shm_head->is_terminate && life < 10)
+End:
+    if(!my_args.p_shm_head->is_terminate && life < LIFE)
         goto Load;
 
-    shm_head->life_end_count++;
+    if(my_args.p_shm_head->is_terminate)
+    {
+        char path[64];
+        sprintf(path, "./save/%d", getpid());
+        int _fd = open(path, O_CREAT | O_WRONLY, S_IRWXU);
+        write(_fd, my_args.p_code, CODE_SIZE);
+        close(_fd);
+    }
+
     GeneLibrary::sfree(my_gene.pos, getpid(), (float)my_gene.fitness);
-    shmdt(shm_head);
-    munmap(code, CODE_SIZE);
     exit(0);
 }
 
@@ -157,6 +165,30 @@ double m_func_cost(double *real, double *test)
     return cost;
 }
 
+void handle_exit(int e_code, void *args)
+{
+    share_args *m_args = (share_args *)args;
+
+    switch (e_code)
+    {
+    case 0:
+        m_args->p_shm_head->life_end_count++;
+        break;
+    case EXIT_FORK_ERROR:
+        m_args->p_shm_head->fork_fail_count++;
+        break;
+    case EXIT_FREE_BEATEN:
+        m_args->p_shm_head->sfree_fail_count++;
+        break;
+    case EXIT_MEM_FULL:
+        m_args->p_shm_head->smalc_fail_count++;
+        break;
+    }
+
+    shmdt(m_args->p_shm_head);
+    munmap(m_args->p_code, CODE_SIZE);
+}
+
 void handle_child(int _sig)
 {
     wait(nullptr);
@@ -164,8 +196,4 @@ void handle_child(int _sig)
 void handle_sig(int _sig)
 {
     exit(-_sig);
-}
-void handle_exit()
-{
-
 }
