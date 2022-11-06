@@ -17,7 +17,7 @@ public:
     uint8_t *data;
     GeneLibrary::shm_head_data *my_head;
     uint8_t *my_data;
-    double *my_fitness;
+    GeneLibrary::pid_mem *my_fitness;
     bool should_close = false;
 
     void init()
@@ -30,7 +30,7 @@ public:
 
         my_head    = ((GeneLibrary::shm_head_data *)data);
         my_data    = (uint8_t *)(data + my_head->p_data);
-        my_fitness = (double *)(data + my_head->p_fitness);
+        my_fitness = (GeneLibrary::pid_mem *)(data + my_head->p_fitness);
 
         m_window = initscr();
 
@@ -64,10 +64,18 @@ public:
         {
             for(size_t j = 0; j < 32; j++)
             {
-                GeneLibrary::pid_mem *a_pidm = (GeneLibrary::pid_mem *)(my_fitness + i * 32 + j);
-                if(a_pidm->ffitness >= 0.99999f)
+                GeneLibrary::pid_mem *a_pidm = my_fitness + i * 32 + j;
+                if(a_pidm->ffitness > 1.00001)
+                {
+                    addch('@');
+                }
+                else if(a_pidm->ffitness >= 0.99999)
                 {
                     addch('#');
+                }
+                else if(a_pidm->ffitness == 0.)
+                {
+                    addch('_');
                 }
                 else
                 {
